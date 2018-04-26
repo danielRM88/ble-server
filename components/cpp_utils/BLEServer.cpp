@@ -14,6 +14,7 @@
 //#include <esp_gatts_api.h>
 #include "BLEDevice.h"
 #include "BLEServer.h"
+#include "BLEAddress.h"
 #include "BLEService.h"
 #include "BLEUtils.h"
 #include <string.h>
@@ -25,7 +26,6 @@
 #endif
 
 static const char* LOG_TAG = "BLEServer";
-
 
 /**
  * @brief Construct a %BLE Server
@@ -39,6 +39,10 @@ BLEServer::BLEServer() {
 	m_connectedCount   = 0;
 	m_connId           = -1;
 	m_pServerCallbacks = nullptr;
+
+//	for(int i=0; i<BLEServer::NUMBER_OF_CLIENTS; i++) {
+//		addresses[i] = new BLEAddress("");
+//	}
 
 	//createApp(0);
 } // BLEServer
@@ -199,6 +203,26 @@ void BLEServer::handleGATTServerEvent(
 		//
 		case ESP_GATTS_CONNECT_EVT: {
 			m_connId = param->connect.conn_id; // Save the connection id.
+			ESP_LOGI(LOG_TAG, "CONN_ID: %d", m_connId);
+			if (m_connId <= NUMBER_OF_CLIENTS) {
+				startAdvertising();
+
+				esp_bd_addr_t connected_address;
+				connected_address[0] = (uint8_t)param->connect.remote_bda[0];
+				connected_address[1] = (uint8_t)param->connect.remote_bda[1];
+				connected_address[2] = (uint8_t)param->connect.remote_bda[2];
+				connected_address[3] = (uint8_t)param->connect.remote_bda[3];
+				connected_address[4] = (uint8_t)param->connect.remote_bda[4];
+				connected_address[5] = (uint8_t)param->connect.remote_bda[5];
+				BLEAddress *address = new BLEAddress(connected_address);
+//				delete getAddresses()[m_connId];
+				getAddresses()[m_connId] = *address;
+				ESP_LOGI(LOG_TAG, "Address: %s", getAddresses()[m_connId].toString().c_str());
+
+				for(int i=0; i<=BLEServer::NUMBER_OF_CLIENTS; i++) {
+					ESP_LOGI(LOG_TAG, "ADDRESS %d: %s", i, getAddresses()[i].toString().c_str());
+				}
+			}
 			if (m_pServerCallbacks != nullptr) {
 				m_pServerCallbacks->onConnect(this);
 			}
@@ -234,9 +258,16 @@ void BLEServer::handleGATTServerEvent(
 		// we also want to start advertising again.
 		case ESP_GATTS_DISCONNECT_EVT: {
 			m_connectedCount--;                          // Decrement the number of connected devices count.
+			if(param->connect.conn_id <= BLEServer::NUMBER_OF_CLIENTS) {
+				ESP_LOGI(LOG_TAG, "CONN_ID %d", param->connect.conn_id);
+				ESP_LOGI(LOG_TAG, "DELETING %s", getAddresses()[param->connect.conn_id].toString().c_str());
+//				delete &getAddresses()[param->connect.conn_id];
+				ESP_LOGI(LOG_TAG, "AFTER DELETE");
+			}
 			if (m_pServerCallbacks != nullptr) {         // If we have callbacks, call now.
 				m_pServerCallbacks->onDisconnect(this);
 			}
+			ESP_LOGI(LOG_TAG, "BEFORE ADVERTISING");
 			startAdvertising(); //- do this with some delay from the loop()
 			break;
 		} // ESP_GATTS_DISCONNECT_EVT
@@ -294,6 +325,9 @@ void BLEServer::handleGATTServerEvent(
 	ESP_LOGD(LOG_TAG, "<< handleGATTServerEvent");
 } // handleGATTServerEvent
 
+BLEAddress *BLEServer::getAddresses() {
+	return addresses;
+}
 
 /**
  * @brief Register the app.

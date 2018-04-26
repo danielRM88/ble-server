@@ -20,6 +20,7 @@
  */
 class BLEAddress {
 public:
+	BLEAddress();
 	BLEAddress(esp_bd_addr_t address);
 	BLEAddress(std::string stringAddress);
 	bool           equals(BLEAddress otherAddress);

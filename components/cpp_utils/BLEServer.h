@@ -15,6 +15,7 @@
 #include <string.h>
 
 #include "BLEUUID.h"
+#include "BLEAddress.h"
 #include "BLEAdvertising.h"
 #include "BLECharacteristic.h"
 #include "BLEService.h"
@@ -58,6 +59,8 @@ public:
 	BLEAdvertising* getAdvertising();
 	void            setCallbacks(BLEServerCallbacks* pCallbacks);
 	void            startAdvertising();
+	BLEAddress		*getAddresses();
+	static const int NUMBER_OF_CLIENTS = 1;
 
 
 private:
@@ -82,6 +85,7 @@ private:
 	void            handleGAPEvent(esp_gap_ble_cb_event_t event,	esp_ble_gap_cb_param_t *param);
 	void            handleGATTServerEvent(esp_gatts_cb_event_t event, esp_gatt_if_t gatts_if, esp_ble_gatts_cb_param_t *param);
 	void            registerApp();
+	BLEAddress 		addresses[BLEServer::NUMBER_OF_CLIENTS];
 }; // BLEServer
 
 

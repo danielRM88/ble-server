@@ -13,9 +13,11 @@
 #include <esp_log.h>
 #include <string>
 #include <sstream>
+#include <array>
 #include "BLEDevice.h"
 
 #include "BLEServer.h"
+#include "BLEAddress.h"
 #include "BLEUtils.h"
 #include "BLE2902.h"
 #include "Task.h"
@@ -31,40 +33,21 @@ extern "C" {
 
 static BLEUUID serviceUUID("91bad492-b950-4226-aa2b-4ede9fa42f59");
 // The characteristic of the remote service we are interested in.
-static BLEUUID    rssi1UUID("0d563a58-196a-48ce-ace2-dfec78acc814");
-static BLEUUID    rssi2UUID("12345678-9ABC-DEF1-2345-6789ABCDEF12");
-
-BLECharacteristic *rssi1;
-BLECharacteristic *rssi2;
-
-FreeRTOS::Semaphore m_semaphoreHttpTask   = FreeRTOS::Semaphore("HttpTask");
-
-//class MyNotifyTask: public Task {
-//	void run(void *data) {
-//		uint8_t value = 0;
-//		while(1) {
-//			delay(2000);
-//			ESP_LOGD(LOG_TAG, "*** NOTIFY: %d ***", value);
-////			pCharacteristic->setValue("send");
-//			pCharacteristic->setValue(&value, 1);
-//			pCharacteristic->notify();
-//			//pCharacteristic->indicate();
-//			value++;
-//		} // While 1
-//	} // run
-//}; // MyNotifyTask
-//
-//MyNotifyTask *pMyNotifyTask;
+static BLEUUID    charUUID("0d563a58-196a-48ce-ace2-dfec78acc814");
 
 class CurlTestTask: public Task {
 	void run(void *data) {
-		ESP_LOGD(LOG_TAG, "SENDING HTTP REQ");
+		ESP_LOGI(LOG_TAG, "TASK STARTED!");
+		BLEServer *pServer = (BLEServer*)data;
+		BLEAddress *addresses = pServer->getAddresses();
 
-		rssi1->setValue("");
-		rssi2->setValue("");
+		for(int i=0; i<=BLEServer::NUMBER_OF_CLIENTS; i++) {
+			ESP_LOGI(LOG_TAG, "ADDRESS %d: %s", i, addresses[i].toString().c_str());
+		}
 
-		m_semaphoreHttpTask.give();
-//		ESP_LOGD(tag, "Testing curl ...");
+//		if (addresses[2].toString().length() > 0) {
+//			ESP_LOGI(LOG_TAG, "SECOND ADDRESS: %s", addresses[2].toString().c_str());
+//		}
 //		RESTClient client;
 //
 //		/**
@@ -87,55 +70,22 @@ class CurlTestTask: public Task {
 
 static CurlTestTask *curlTestTask;
 
-class MyCallbacks: public BLECharacteristicCallbacks {
-	void onWrite(BLECharacteristic *pChar) {
-		std::string value = pChar->getValue();
-		std::string rssiValue1 = rssi1->getValue();
-		std::string rssiValue2 = rssi2->getValue();
-		if (value.length() > 0) {
-			ESP_LOGD(LOG_TAG, "*********");
-			ESP_LOGD(LOG_TAG, "New value: %s", value.c_str());
-			ESP_LOGD(LOG_TAG, "*********");
-		}
-
-		if (pChar->getUUID().equals(rssi1->getUUID())) {
-			ESP_LOGD(LOG_TAG, "New value for rssi1");
-			if (rssiValue1.compare("send") == 0) {
-				rssiValue1 = value;
-				rssi1->setValue(value);
-			}
-		} else if (pChar->getUUID().equals(rssi2->getUUID())) {
-			ESP_LOGD(LOG_TAG, "New value for rssi2");
-			if (rssiValue2.compare("send") == 0) {
-				rssiValue2 = value;
-				rssi2->setValue(value);
-			}
-		}
-
-		if(rssiValue1.compare("send") != 0 && rssiValue2.compare("send") != 0) {
-//			m_semaphoreHttpTask.take("http");
-//			if(rssiValue1.length() > 0 && rssiValue2.length() > 0) {
-//				curlTestTask = new CurlTestTask();
-//				curlTestTask->setStackSize(12000);
-//				curlTestTask->start();
-//			}
-//			m_semaphoreHttpTask.wait("http");
-			rssi1->setValue("send");
-			rssi2->setValue("send");
-		}
-	}
-};
-
-
 class MyServerCallbacks: public BLEServerCallbacks {
 	void onConnect(BLEServer* pServer) {
-//		pMyNotifyTask->start();
 		ESP_LOGI(LOG_TAG, "CONNECTED!");
-		pServer->getAdvertising()->start();
+		if(pServer->getConnectedCount() == BLEServer::NUMBER_OF_CLIENTS) {
+			curlTestTask = new CurlTestTask();
+			curlTestTask->setStackSize(12000);
+			curlTestTask->start(pServer);
+		}
+//		pServer->getAdvertising()->start();
 	};
 
 	void onDisconnect(BLEServer* pServer) {
 //		pMyNotifyTask->stop();
+		ESP_LOGI(LOG_TAG, "DISCONNECTED!");
+		curlTestTask->stop();
+		ESP_LOGI(LOG_TAG, "TASK STOPPED!");
 	}
 };
 
@@ -154,16 +104,8 @@ static void run() {
 	BLEService *pService = pServer->createService(serviceUUID);
 
 	// Create a BLE Characteristic
-	rssi1 = pService->createCharacteristic(
-		rssi1UUID,
-		BLECharacteristic::PROPERTY_READ   |
-		BLECharacteristic::PROPERTY_WRITE  |
-		BLECharacteristic::PROPERTY_NOTIFY |
-		BLECharacteristic::PROPERTY_INDICATE
-	);
-
-	rssi2 = pService->createCharacteristic(
-		rssi2UUID,
+	BLECharacteristic *pCharacteristic = pService->createCharacteristic(
+		charUUID,
 		BLECharacteristic::PROPERTY_READ   |
 		BLECharacteristic::PROPERTY_WRITE  |
 		BLECharacteristic::PROPERTY_NOTIFY |
@@ -174,13 +116,7 @@ static void run() {
 	// Create a BLE Descriptor
 //	BLE2902* p2902Descriptor = new BLE2902();
 //	p2902Descriptor->setNotifications(true);
-	rssi1->addDescriptor(new BLE2902());
-	rssi1->setCallbacks(new MyCallbacks());
-	rssi1->setValue("send");
-
-	rssi2->addDescriptor(new BLE2902());
-	rssi2->setCallbacks(new MyCallbacks());
-	rssi2->setValue("send");
+	pCharacteristic->addDescriptor(new BLE2902());
 
 	// Start the service
 	pService->start();
