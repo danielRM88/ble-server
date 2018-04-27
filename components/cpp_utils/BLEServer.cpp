@@ -39,7 +39,6 @@ BLEServer::BLEServer() {
 	m_connectedCount   = 0;
 	m_connId           = -1;
 	m_pServerCallbacks = nullptr;
-
 //	for(int i=0; i<BLEServer::NUMBER_OF_CLIENTS; i++) {
 //		addresses[i] = new BLEAddress("");
 //	}
@@ -155,6 +154,11 @@ void BLEServer::handleGAPEvent(
 			*/
 			break;
 		}
+		case ESP_GAP_BLE_READ_RSSI_COMPLETE_EVT: {
+			int rssi = (uint32_t)param->read_rssi_cmpl.rssi;
+			m_semaphoreRssiCmplEvt.give(rssi);
+			break;
+		}
 
 		default:
 			break;
@@ -203,7 +207,6 @@ void BLEServer::handleGATTServerEvent(
 		//
 		case ESP_GATTS_CONNECT_EVT: {
 			m_connId = param->connect.conn_id; // Save the connection id.
-			ESP_LOGI(LOG_TAG, "CONN_ID: %d", m_connId);
 			if (m_connId <= NUMBER_OF_CLIENTS) {
 				startAdvertising();
 
@@ -215,13 +218,7 @@ void BLEServer::handleGATTServerEvent(
 				connected_address[4] = (uint8_t)param->connect.remote_bda[4];
 				connected_address[5] = (uint8_t)param->connect.remote_bda[5];
 				BLEAddress *address = new BLEAddress(connected_address);
-//				delete getAddresses()[m_connId];
 				getAddresses()[m_connId] = *address;
-				ESP_LOGI(LOG_TAG, "Address: %s", getAddresses()[m_connId].toString().c_str());
-
-				for(int i=0; i<=BLEServer::NUMBER_OF_CLIENTS; i++) {
-					ESP_LOGI(LOG_TAG, "ADDRESS %d: %s", i, getAddresses()[i].toString().c_str());
-				}
 			}
 			if (m_pServerCallbacks != nullptr) {
 				m_pServerCallbacks->onConnect(this);
@@ -259,15 +256,12 @@ void BLEServer::handleGATTServerEvent(
 		case ESP_GATTS_DISCONNECT_EVT: {
 			m_connectedCount--;                          // Decrement the number of connected devices count.
 			if(param->connect.conn_id <= BLEServer::NUMBER_OF_CLIENTS) {
-				ESP_LOGI(LOG_TAG, "CONN_ID %d", param->connect.conn_id);
-				ESP_LOGI(LOG_TAG, "DELETING %s", getAddresses()[param->connect.conn_id].toString().c_str());
 //				delete &getAddresses()[param->connect.conn_id];
 				ESP_LOGI(LOG_TAG, "AFTER DELETE");
 			}
 			if (m_pServerCallbacks != nullptr) {         // If we have callbacks, call now.
 				m_pServerCallbacks->onDisconnect(this);
 			}
-			ESP_LOGI(LOG_TAG, "BEFORE ADVERTISING");
 			startAdvertising(); //- do this with some delay from the loop()
 			break;
 		} // ESP_GATTS_DISCONNECT_EVT

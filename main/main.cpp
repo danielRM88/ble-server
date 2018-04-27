@@ -14,18 +14,34 @@
 #include <string>
 #include <sstream>
 #include <array>
-#include "BLEDevice.h"
 
+#include <curl/curl.h>
+#include <RESTClient.h>
+#include <WiFi.h>
+#include <WiFiEventHandler.h>
+
+#include "BLEDevice.h"
 #include "BLEServer.h"
 #include "BLEAddress.h"
 #include "BLEUtils.h"
 #include "BLE2902.h"
+
 #include "Task.h"
-
-
+#include "GeneralUtils.h"
 #include "sdkconfig.h"
 
 static char LOG_TAG[] = "main";
+static const int BUILT_IN_LED = 2;
+static const int ON = 1;
+static const int OFF = 1;
+
+static int connected = 0;
+
+//#define WIFI_SSID "Hall_Of_Residence"
+//#define WIFI_PASSWORD "hofr6971"
+
+#define WIFI_SSID "Daniel's iPhone"
+#define WIFI_PASSWORD "daniel'sPASSWORD!?"
 
 extern "C" {
 	void app_main(void);
@@ -35,35 +51,47 @@ static BLEUUID serviceUUID("91bad492-b950-4226-aa2b-4ede9fa42f59");
 // The characteristic of the remote service we are interested in.
 static BLEUUID    charUUID("0d563a58-196a-48ce-ace2-dfec78acc814");
 
+static int taskRunning = 0;
+static int restarting = 0;
+
+static WiFi *wifi;
+
 class CurlTestTask: public Task {
 	void run(void *data) {
 		ESP_LOGI(LOG_TAG, "TASK STARTED!");
 		BLEServer *pServer = (BLEServer*)data;
 		BLEAddress *addresses = pServer->getAddresses();
+		RESTClient client;
 
-		for(int i=0; i<=BLEServer::NUMBER_OF_CLIENTS; i++) {
-			ESP_LOGI(LOG_TAG, "ADDRESS %d: %s", i, addresses[i].toString().c_str());
+		while(1) {
+			if(connected == 1) {
+
+				for(int i=0; i<=BLEServer::NUMBER_OF_CLIENTS; i++) {
+					ESP_LOGI(LOG_TAG, "ADDRESS %d: %s", i, addresses[i].toString().c_str());
+
+					pServer->m_semaphoreRssiCmplEvt.take("getRssi");
+					esp_err_t rc = ::esp_ble_gap_read_rssi(*addresses[i].getNative());
+					if (rc != ESP_OK) {
+						ESP_LOGE(LOG_TAG, "<< getRssi: esp_ble_gap_read_rssi: rc=%d %s", rc, GeneralUtils::errorToString(rc));
+					} else {
+						int rssiValue = pServer->m_semaphoreRssiCmplEvt.wait("getRssi");
+						ESP_LOGI(LOG_TAG, "RSSI: %d", rssiValue);
+					}
+				}
+
+				client.setURL("http://172.20.10.3:3000/post");
+				client.addHeader("Content-Type", "application/json");
+				client.post("hello world!");
+
+				GPIO_OUTPUT_SET( BUILT_IN_LED, OFF );
+				FreeRTOS::sleep(500);
+				GPIO_OUTPUT_SET( BUILT_IN_LED, ON );
+			} else {
+				ESP_LOGI(LOG_TAG, "Attempting reconnect");
+				wifi->connectAP(WIFI_SSID, WIFI_PASSWORD);
+			}
 		}
 
-//		if (addresses[2].toString().length() > 0) {
-//			ESP_LOGI(LOG_TAG, "SECOND ADDRESS: %s", addresses[2].toString().c_str());
-//		}
-//		RESTClient client;
-//
-//		/**
-//		 * Test POST
-//		 */
-//
-//		RESTTimings *timings = client.getTimings();
-//
-//		client.setURL("http://httpbin.org/post");
-//		client.addHeader("Content-Type", "application/json");
-//		client.post("hello world!");
-//		ESP_LOGD(tag, "Result: %s", client.getResponse().c_str());
-//		timings->refresh();
-//		ESP_LOGD(tag, "timings: %s", timings->toString().c_str());
-//
-//		printf("Tests done\n");
 		return;
 	}
 };
@@ -73,25 +101,45 @@ static CurlTestTask *curlTestTask;
 class MyServerCallbacks: public BLEServerCallbacks {
 	void onConnect(BLEServer* pServer) {
 		ESP_LOGI(LOG_TAG, "CONNECTED!");
+		GPIO_OUTPUT_SET( BUILT_IN_LED, ON );
+		FreeRTOS::sleep(500);
+		GPIO_OUTPUT_SET( BUILT_IN_LED, OFF );
 		if(pServer->getConnectedCount() == BLEServer::NUMBER_OF_CLIENTS) {
 			curlTestTask = new CurlTestTask();
 			curlTestTask->setStackSize(12000);
 			curlTestTask->start(pServer);
+			taskRunning = 1;
 		}
-//		pServer->getAdvertising()->start();
 	};
 
 	void onDisconnect(BLEServer* pServer) {
-//		pMyNotifyTask->stop();
 		ESP_LOGI(LOG_TAG, "DISCONNECTED!");
-		curlTestTask->stop();
-		ESP_LOGI(LOG_TAG, "TASK STOPPED!");
+		if(taskRunning == 1) {
+			curlTestTask->stop();
+			ESP_LOGI(LOG_TAG, "TASK STOPPED!");
+			taskRunning = 0;
+		}
+	}
+};
+
+class MyWiFiEventHandler: public WiFiEventHandler {
+
+	esp_err_t staGotIp(system_event_sta_got_ip_t event_sta_got_ip) {
+		ESP_LOGI(LOG_TAG, "MyWiFiEventHandler(Class): staGotIp");
+
+		connected = 1;
+		ESP_LOGI(LOG_TAG, "Connected: %d", connected);
+
+		return ESP_OK;
 	}
 };
 
 static void run() {
-//	pMyNotifyTask = new MyNotifyTask();
-//	pMyNotifyTask->setStackSize(8000);
+
+	MyWiFiEventHandler *eventHandler = new MyWiFiEventHandler();
+	wifi = new WiFi();
+	wifi->setWifiEventHandler(eventHandler);
+	wifi->connectAP(WIFI_SSID, WIFI_PASSWORD);
 
 	// Create the BLE Device
 	BLEDevice::init("ESP32");
@@ -112,10 +160,6 @@ static void run() {
 		BLECharacteristic::PROPERTY_INDICATE
 	);
 
-	// https://www.bluetooth.com/specifications/gatt/viewer?attributeXmlFile=org.bluetooth.descriptor.gatt.client_characteristic_configuration.xml
-	// Create a BLE Descriptor
-//	BLE2902* p2902Descriptor = new BLE2902();
-//	p2902Descriptor->setNotifications(true);
 	pCharacteristic->addDescriptor(new BLE2902());
 
 	// Start the service
@@ -123,6 +167,7 @@ static void run() {
 
 	// Start advertising
 	pServer->getAdvertising()->addServiceUUID(pService->getUUID());
+//	BLEDevice::setPower(ESP_PWR_LVL_P1);
 	pServer->getAdvertising()->start();
 }
 

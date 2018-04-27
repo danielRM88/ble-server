@@ -60,8 +60,8 @@ public:
 	void            setCallbacks(BLEServerCallbacks* pCallbacks);
 	void            startAdvertising();
 	BLEAddress		*getAddresses();
-	static const int NUMBER_OF_CLIENTS = 1;
-
+	static const int NUMBER_OF_CLIENTS = 2;
+	FreeRTOS::Semaphore m_semaphoreRssiCmplEvt = FreeRTOS::Semaphore("RssiCmplEvt");
 
 private:
 	BLEServer();
