@@ -220,10 +220,10 @@ void BLEServer::handleGATTServerEvent(
 				BLEAddress *address = new BLEAddress(connected_address);
 				getAddresses()[m_connId] = *address;
 			}
+			m_connectedCount++;   // Increment the number of connected devices count.
 			if (m_pServerCallbacks != nullptr) {
 				m_pServerCallbacks->onConnect(this);
 			}
-			m_connectedCount++;   // Increment the number of connected devices count.
 			break;
 		} // ESP_GATTS_CONNECT_EVT
 

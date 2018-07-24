@@ -30,6 +30,10 @@
 #include "GeneralUtils.h"
 #include "sdkconfig.h"
 
+extern "C" {
+	#include "http.h"
+}
+
 static char LOG_TAG[] = "main";
 static const int BUILT_IN_LED = 2;
 static const int ON = 1;
@@ -52,9 +56,9 @@ static BLEUUID serviceUUID("91bad492-b950-4226-aa2b-4ede9fa42f59");
 static BLEUUID    charUUID("0d563a58-196a-48ce-ace2-dfec78acc814");
 
 static int taskRunning = 0;
-static int restarting = 0;
 
 static WiFi *wifi;
+static BLEServer *pServer;
 
 class CurlTestTask: public Task {
 	void run(void *data) {
@@ -66,8 +70,10 @@ class CurlTestTask: public Task {
 		while(1) {
 			if(connected == 1) {
 
-				for(int i=0; i<=BLEServer::NUMBER_OF_CLIENTS; i++) {
-					ESP_LOGI(LOG_TAG, "ADDRESS %d: %s", i, addresses[i].toString().c_str());
+				std::ostringstream stringStream;
+				int rssis = 0;
+				for(int i=0; i<BLEServer::NUMBER_OF_CLIENTS; i++) {
+//					ESP_LOGI(LOG_TAG, "ADDRESS %d: %s", i, addresses[i].toString().c_str());
 
 					pServer->m_semaphoreRssiCmplEvt.take("getRssi");
 					esp_err_t rc = ::esp_ble_gap_read_rssi(*addresses[i].getNative());
@@ -75,16 +81,38 @@ class CurlTestTask: public Task {
 						ESP_LOGE(LOG_TAG, "<< getRssi: esp_ble_gap_read_rssi: rc=%d %s", rc, GeneralUtils::errorToString(rc));
 					} else {
 						int rssiValue = pServer->m_semaphoreRssiCmplEvt.wait("getRssi");
-						ESP_LOGI(LOG_TAG, "RSSI: %d", rssiValue);
+//						ESP_LOGI(LOG_TAG, "RSSI: %d", rssiValue);
+						stringStream << rssiValue << " ";
+						rssis += rssiValue;
 					}
 				}
 
-				client.setURL("http://172.20.10.3:3000/post");
-				client.addHeader("Content-Type", "application/json");
-				client.post("hello world!");
+				std::ostringstream jsonBody;
+				jsonBody << (rssis/BLEServer::NUMBER_OF_CLIENTS);
+				ESP_LOGI(LOG_TAG, "RSSIS: %s", stringStream.str().c_str());
+				std::string body("{\"rssi\":");
+				body.append(jsonBody.str());
+				body.append("}");
+				ESP_LOGI(LOG_TAG, "URL: %s", body.c_str());
+//				client.setURL("http://172.20.10.3:3000/register");
+//				client.addHeader("Content-Type", "application/json");
+//				client.post(body.c_str());
+
+				std::string buf("GET ");
+				buf.append("/register?rssi=");
+				buf.append(jsonBody.str());
+				buf.append(" HTTP/1.1\r\n");
+				buf.append("Host: 172.20.10.3:3000/\r\n");
+				buf.append("User-Agent: esp-idf/1.0 esp32\r\n");
+				buf.append("\r\n");
+
+				const char* req = buf.c_str();
+
+				ESP_LOGI(LOG_TAG, "Request: %s", req);
+				send_req(req);
 
 				GPIO_OUTPUT_SET( BUILT_IN_LED, OFF );
-				FreeRTOS::sleep(500);
+				FreeRTOS::sleep(1000);
 				GPIO_OUTPUT_SET( BUILT_IN_LED, ON );
 			} else {
 				ESP_LOGI(LOG_TAG, "Attempting reconnect");
@@ -132,6 +160,27 @@ class MyWiFiEventHandler: public WiFiEventHandler {
 
 		return ESP_OK;
 	}
+
+	esp_err_t staDisconnected(system_event_sta_disconnected_t info) {
+		ESP_LOGI(LOG_TAG, "MyWiFiEventHandler(Class): staDisconnected");
+
+		connected = 0;
+//		if(taskRunning == 1) {
+//			curlTestTask->stop();
+//			ESP_LOGI(LOG_TAG, "TASK STOPPED!");
+//			taskRunning = 0;
+//		}
+//		if(pServer->getConnectedCount() == BLEServer::NUMBER_OF_CLIENTS) {
+//			curlTestTask = new CurlTestTask();
+//			curlTestTask->setStackSize(12000);
+//			curlTestTask->start(pServer);
+//			taskRunning = 1;
+//		} else {
+//			pServer->getAdvertising()->start();
+//		}
+
+		return ESP_OK;
+	}
 };
 
 static void run() {
@@ -143,9 +192,10 @@ static void run() {
 
 	// Create the BLE Device
 	BLEDevice::init("ESP32");
+	BLEDevice::setPower(ESP_PWR_LVL_P7);
 
 	// Create the BLE Server
-	BLEServer *pServer = BLEDevice::createServer();
+	pServer = BLEDevice::createServer();
 	pServer->setCallbacks(new MyServerCallbacks());
 
 	// Create the BLE Service
