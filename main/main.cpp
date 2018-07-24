@@ -1,208 +1,93 @@
-/*
- * Test the REST API client.
- * This application leverages LibCurl.  You must make that package available
- * as well as "enable it" from "make menuconfig" and C++ Settings -> libCurl present.
+/**
+ * Create a BLE server that, once we receive a connection, will send periodic notifications.
+ * The service advertises itself as: 4fafc201-1fb5-459e-8fcc-c5c9c331914b
+ * And has a characteristic of: beb5483e-36e1-4688-b7f5-ea07361b26a8
  *
- * You may also have to include "posix_shims.c" in your compilation to provide resolution
- * for Posix calls expected by libcurl that aren't present in ESP-IDF.
+ * The design of creating the BLE server is:
+ * 1. Create a BLE Server
+ * 2. Create a BLE Service
+ * 3. Create a BLE Characteristic on the Service
+ * 4. Create a BLE Descriptor on the characteristic
+ * 5. Start the service.
+ * 6. Start advertising.
  *
- * See also:
- * * https://github.com/nkolban/esp32-snippets/issues/108
+ * A connect hander associated with the server starts a background task that performs notification
+ * every couple of seconds.
+ *
+ * @author: Neil Kolban, July 2017
  *
  */
+#include "sdkconfig.h"
+
 #include <esp_log.h>
 #include <string>
 #include <sstream>
-#include <array>
-
-#include <curl/curl.h>
-#include <RESTClient.h>
-#include <WiFi.h>
-#include <WiFiEventHandler.h>
-
+#include <sys/time.h>
 #include "BLEDevice.h"
+
 #include "BLEServer.h"
-#include "BLEAddress.h"
 #include "BLEUtils.h"
 #include "BLE2902.h"
-
 #include "Task.h"
-#include "GeneralUtils.h"
-#include "sdkconfig.h"
-
-extern "C" {
-	#include "http.h"
-}
-
-static char LOG_TAG[] = "main";
-static const int BUILT_IN_LED = 2;
-static const int ON = 1;
-static const int OFF = 1;
-
-static int connected = 0;
-
-//#define WIFI_SSID "Hall_Of_Residence"
-//#define WIFI_PASSWORD "hofr6971"
-
-#define WIFI_SSID "Daniel's iPhone"
-#define WIFI_PASSWORD "daniel'sPASSWORD!?"
 
 extern "C" {
 	void app_main(void);
 }
 
+static char LOG_TAG[] = "BLEServer";
+
+// See the following for generating UUIDs:
+// https://www.uuidgenerator.net/
+
+//#define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 static BLEUUID serviceUUID("91bad492-b950-4226-aa2b-4ede9fa42f59");
-// The characteristic of the remote service we are interested in.
+//#define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 static BLEUUID    charUUID("0d563a58-196a-48ce-ace2-dfec78acc814");
 
-static int taskRunning = 0;
+BLECharacteristic *rssi1;
 
-static WiFi *wifi;
-static BLEServer *pServer;
-
-class CurlTestTask: public Task {
+class MyNotifyTask: public Task {
 	void run(void *data) {
-		ESP_LOGI(LOG_TAG, "TASK STARTED!");
-		BLEServer *pServer = (BLEServer*)data;
-		BLEAddress *addresses = pServer->getAddresses();
-		RESTClient client;
-
+		uint8_t value = 0;
 		while(1) {
-			if(connected == 1) {
+			delay(2000);
+			ESP_LOGD(LOG_TAG, "*** NOTIFY: %d ***", value);
+			rssi1->setValue(&value, 1);
+			rssi1->notify();
+			//pCharacteristic->indicate();
+			value++;
+		} // While 1
+	} // run
+}; // MyNotifyTask
 
-				std::ostringstream stringStream;
-				int rssis = 0;
-				for(int i=0; i<BLEServer::NUMBER_OF_CLIENTS; i++) {
-//					ESP_LOGI(LOG_TAG, "ADDRESS %d: %s", i, addresses[i].toString().c_str());
-
-					pServer->m_semaphoreRssiCmplEvt.take("getRssi");
-					esp_err_t rc = ::esp_ble_gap_read_rssi(*addresses[i].getNative());
-					if (rc != ESP_OK) {
-						ESP_LOGE(LOG_TAG, "<< getRssi: esp_ble_gap_read_rssi: rc=%d %s", rc, GeneralUtils::errorToString(rc));
-					} else {
-						int rssiValue = pServer->m_semaphoreRssiCmplEvt.wait("getRssi");
-//						ESP_LOGI(LOG_TAG, "RSSI: %d", rssiValue);
-						stringStream << rssiValue << " ";
-						rssis += rssiValue;
-					}
-				}
-
-				std::ostringstream jsonBody;
-				jsonBody << (rssis/BLEServer::NUMBER_OF_CLIENTS);
-				ESP_LOGI(LOG_TAG, "RSSIS: %s", stringStream.str().c_str());
-				std::string body("{\"rssi\":");
-				body.append(jsonBody.str());
-				body.append("}");
-				ESP_LOGI(LOG_TAG, "URL: %s", body.c_str());
-//				client.setURL("http://172.20.10.3:3000/register");
-//				client.addHeader("Content-Type", "application/json");
-//				client.post(body.c_str());
-
-				std::string buf("GET ");
-				buf.append("/register?rssi=");
-				buf.append(jsonBody.str());
-				buf.append(" HTTP/1.1\r\n");
-				buf.append("Host: 172.20.10.3:3000/\r\n");
-				buf.append("User-Agent: esp-idf/1.0 esp32\r\n");
-				buf.append("\r\n");
-
-				const char* req = buf.c_str();
-
-				ESP_LOGI(LOG_TAG, "Request: %s", req);
-				send_req(req);
-
-				GPIO_OUTPUT_SET( BUILT_IN_LED, OFF );
-				FreeRTOS::sleep(1000);
-				GPIO_OUTPUT_SET( BUILT_IN_LED, ON );
-			} else {
-				ESP_LOGI(LOG_TAG, "Attempting reconnect");
-				wifi->connectAP(WIFI_SSID, WIFI_PASSWORD);
-			}
-		}
-
-		return;
-	}
-};
-
-static CurlTestTask *curlTestTask;
+MyNotifyTask *pMyNotifyTask;
 
 class MyServerCallbacks: public BLEServerCallbacks {
 	void onConnect(BLEServer* pServer) {
-		ESP_LOGI(LOG_TAG, "CONNECTED!");
-		GPIO_OUTPUT_SET( BUILT_IN_LED, ON );
-		FreeRTOS::sleep(500);
-		GPIO_OUTPUT_SET( BUILT_IN_LED, OFF );
-		if(pServer->getConnectedCount() == BLEServer::NUMBER_OF_CLIENTS) {
-			curlTestTask = new CurlTestTask();
-			curlTestTask->setStackSize(12000);
-			curlTestTask->start(pServer);
-			taskRunning = 1;
-		}
+		pMyNotifyTask->start();
 	};
 
 	void onDisconnect(BLEServer* pServer) {
-		ESP_LOGI(LOG_TAG, "DISCONNECTED!");
-		if(taskRunning == 1) {
-			curlTestTask->stop();
-			ESP_LOGI(LOG_TAG, "TASK STOPPED!");
-			taskRunning = 0;
-		}
-	}
-};
-
-class MyWiFiEventHandler: public WiFiEventHandler {
-
-	esp_err_t staGotIp(system_event_sta_got_ip_t event_sta_got_ip) {
-		ESP_LOGI(LOG_TAG, "MyWiFiEventHandler(Class): staGotIp");
-
-		connected = 1;
-		ESP_LOGI(LOG_TAG, "Connected: %d", connected);
-
-		return ESP_OK;
-	}
-
-	esp_err_t staDisconnected(system_event_sta_disconnected_t info) {
-		ESP_LOGI(LOG_TAG, "MyWiFiEventHandler(Class): staDisconnected");
-
-		connected = 0;
-//		if(taskRunning == 1) {
-//			curlTestTask->stop();
-//			ESP_LOGI(LOG_TAG, "TASK STOPPED!");
-//			taskRunning = 0;
-//		}
-//		if(pServer->getConnectedCount() == BLEServer::NUMBER_OF_CLIENTS) {
-//			curlTestTask = new CurlTestTask();
-//			curlTestTask->setStackSize(12000);
-//			curlTestTask->start(pServer);
-//			taskRunning = 1;
-//		} else {
-//			pServer->getAdvertising()->start();
-//		}
-
-		return ESP_OK;
+		pMyNotifyTask->stop();
 	}
 };
 
 static void run() {
-
-	MyWiFiEventHandler *eventHandler = new MyWiFiEventHandler();
-	wifi = new WiFi();
-	wifi->setWifiEventHandler(eventHandler);
-	wifi->connectAP(WIFI_SSID, WIFI_PASSWORD);
+	pMyNotifyTask = new MyNotifyTask();
+	pMyNotifyTask->setStackSize(8000);
 
 	// Create the BLE Device
-	BLEDevice::init("ESP32");
-	BLEDevice::setPower(ESP_PWR_LVL_P7);
+	BLEDevice::init("MYDEVICE");
 
 	// Create the BLE Server
-	pServer = BLEDevice::createServer();
+	BLEServer *pServer = BLEDevice::createServer();
 	pServer->setCallbacks(new MyServerCallbacks());
 
 	// Create the BLE Service
 	BLEService *pService = pServer->createService(serviceUUID);
 
 	// Create a BLE Characteristic
-	BLECharacteristic *pCharacteristic = pService->createCharacteristic(
+	rssi1 = pService->createCharacteristic(
 		charUUID,
 		BLECharacteristic::PROPERTY_READ   |
 		BLECharacteristic::PROPERTY_WRITE  |
@@ -210,14 +95,14 @@ static void run() {
 		BLECharacteristic::PROPERTY_INDICATE
 	);
 
-	pCharacteristic->addDescriptor(new BLE2902());
+	// https://www.bluetooth.com/specifications/gatt/viewer?attributeXmlFile=org.bluetooth.descriptor.gatt.client_characteristic_configuration.xml
+	// Create a BLE Descriptor
+	rssi1->addDescriptor(new BLE2902());
 
 	// Start the service
 	pService->start();
 
 	// Start advertising
-	pServer->getAdvertising()->addServiceUUID(pService->getUUID());
-//	BLEDevice::setPower(ESP_PWR_LVL_P1);
 	pServer->getAdvertising()->start();
 }
 
