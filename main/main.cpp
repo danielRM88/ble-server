@@ -40,9 +40,10 @@ static char LOG_TAG[] = "BLEServer";
 // https://www.uuidgenerator.net/
 
 //#define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
-static BLEUUID serviceUUID("91bad492-b950-4226-aa2b-4ede9fa42f59");
+static BLEUUID 	  serviceUUID("91bad492-b950-4226-aa2b-4ede9fa42f59");
 //#define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 static BLEUUID    charUUID("0d563a58-196a-48ce-ace2-dfec78acc814");
+static BLEUUID    descriptorUUID("beb5483e-36e1-4688-b7f5-ea07361b26a8");
 
 BLECharacteristic *rssi1;
 
@@ -51,7 +52,7 @@ class MyNotifyTask: public Task {
 		uint8_t value = 0;
 		while(1) {
 			delay(2000);
-			ESP_LOGD(LOG_TAG, "*** NOTIFY: %d ***", value);
+			ESP_LOGI(LOG_TAG, "*** NOTIFY: %d ***", value);
 			rssi1->setValue(&value, 1);
 			rssi1->notify();
 			//pCharacteristic->indicate();
@@ -77,7 +78,7 @@ static void run() {
 	pMyNotifyTask->setStackSize(8000);
 
 	// Create the BLE Device
-	BLEDevice::init("MYDEVICE");
+	BLEDevice::init("ESP32");
 
 	// Create the BLE Server
 	BLEServer *pServer = BLEDevice::createServer();
@@ -97,10 +98,16 @@ static void run() {
 
 	// https://www.bluetooth.com/specifications/gatt/viewer?attributeXmlFile=org.bluetooth.descriptor.gatt.client_characteristic_configuration.xml
 	// Create a BLE Descriptor
-	rssi1->addDescriptor(new BLE2902());
+	BLE2902* p2902Descriptor = new BLE2902();
+	p2902Descriptor->setNotifications(true);
+	rssi1->addDescriptor(p2902Descriptor);
+	rssi1->setNotifyProperty(true);
 
 	// Start the service
 	pService->start();
+
+	// Start advertising
+	pServer->getAdvertising()->addServiceUUID(pService->getUUID());
 
 	// Start advertising
 	pServer->getAdvertising()->start();
