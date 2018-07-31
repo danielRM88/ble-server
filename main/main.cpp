@@ -50,6 +50,7 @@ BLECharacteristic *rssi1;
 class MyNotifyTask: public Task {
 	void run(void *data) {
 		uint8_t value = 0;
+		BLEAddress* pAddress = (BLEAddress*)data;
 		while(1) {
 			delay(2000);
 			ESP_LOGI(LOG_TAG, "*** NOTIFY: %d ***", value);
@@ -64,8 +65,8 @@ class MyNotifyTask: public Task {
 MyNotifyTask *pMyNotifyTask;
 
 class MyServerCallbacks: public BLEServerCallbacks {
-	void onConnect(BLEServer* pServer) {
-		pMyNotifyTask->start();
+	void onConnect(BLEServer* pServer, BLEAddress* address) {
+		pMyNotifyTask->start(address);
 	};
 
 	void onDisconnect(BLEServer* pServer) {
