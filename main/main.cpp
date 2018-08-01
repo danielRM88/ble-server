@@ -29,6 +29,7 @@
 #include "BLEUtils.h"
 #include "BLE2902.h"
 #include "Task.h"
+#include "GeneralUtils.h"
 
 extern "C" {
 	void app_main(void);
@@ -39,25 +40,38 @@ static char LOG_TAG[] = "BLEServer";
 // See the following for generating UUIDs:
 // https://www.uuidgenerator.net/
 
-//#define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
+//static BLEUUID 	  serviceUUID("4fafc201-1fb5-459e-8fcc-c5c9c331914b");
 static BLEUUID 	  serviceUUID("91bad492-b950-4226-aa2b-4ede9fa42f59");
-//#define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 static BLEUUID    charUUID("0d563a58-196a-48ce-ace2-dfec78acc814");
-static BLEUUID    descriptorUUID("beb5483e-36e1-4688-b7f5-ea07361b26a8");
+//static BLEUUID    charUUID("beb5483e-36e1-4688-b7f5-ea07361b26a8");
 
 BLECharacteristic *rssi1;
+BLEServer *pServer;
 
 class MyNotifyTask: public Task {
 	void run(void *data) {
-		uint8_t value = 0;
 		BLEAddress* pAddress = (BLEAddress*)data;
+		std::ostringstream stringStream;
+		int rssiValue = 0;
 		while(1) {
-			delay(2000);
-			ESP_LOGI(LOG_TAG, "*** NOTIFY: %d ***", value);
-			rssi1->setValue(&value, 1);
+			delay(1000);
+			rssiValue = 0;
+			stringStream.str("");
+			stringStream.clear();
+			pServer->m_semaphoreRssiCmplEvt.take("getRssi");
+			esp_err_t rc = ::esp_ble_gap_read_rssi(*pAddress->getNative());
+			if (rc != ESP_OK) {
+				ESP_LOGE(LOG_TAG, "<< getRssi: esp_ble_gap_read_rssi: rc=%d %s", rc, GeneralUtils::errorToString(rc));
+			} else {
+				rssiValue = pServer->m_semaphoreRssiCmplEvt.wait("getRssi");
+				ESP_LOGI(LOG_TAG, "RSSI: %d", rssiValue);
+				stringStream << rssiValue;
+			}
+			ESP_LOGI(LOG_TAG, "*** NOTIFY: %s ***", stringStream.str().c_str());
+			rssi1->setValue(stringStream.str());
 			rssi1->notify();
 			//pCharacteristic->indicate();
-			value++;
+//			value++;
 		} // While 1
 	} // run
 }; // MyNotifyTask
@@ -66,11 +80,13 @@ MyNotifyTask *pMyNotifyTask;
 
 class MyServerCallbacks: public BLEServerCallbacks {
 	void onConnect(BLEServer* pServer, BLEAddress* address) {
+		pServer->getAdvertising()->stop();
 		pMyNotifyTask->start(address);
 	};
 
 	void onDisconnect(BLEServer* pServer) {
 		pMyNotifyTask->stop();
+		pServer->getAdvertising()->start();
 	}
 };
 
@@ -82,7 +98,7 @@ static void run() {
 	BLEDevice::init("ESP32");
 
 	// Create the BLE Server
-	BLEServer *pServer = BLEDevice::createServer();
+	pServer = BLEDevice::createServer();
 	pServer->setCallbacks(new MyServerCallbacks());
 
 	// Create the BLE Service
