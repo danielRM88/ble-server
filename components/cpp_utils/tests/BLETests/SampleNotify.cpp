@@ -39,7 +39,7 @@ static char LOG_TAG[] = "SampleNotify";
 #define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 
-BLECharacteristic *rssi1;
+BLECharacteristic *pCharacteristic;
 
 class MyNotifyTask: public Task {
 	void run(void *data) {
@@ -47,8 +47,8 @@ class MyNotifyTask: public Task {
 		while(1) {
 			delay(2000);
 			ESP_LOGD(LOG_TAG, "*** NOTIFY: %d ***", value);
-			rssi1->setValue(&value, 1);
-			rssi1->notify();
+			pCharacteristic->setValue(&value, 1);
+			pCharacteristic->notify();
 			//pCharacteristic->indicate();
 			value++;
 		} // While 1
@@ -82,7 +82,7 @@ static void run() {
 	BLEService *pService = pServer->createService(BLEUUID(SERVICE_UUID));
 
 	// Create a BLE Characteristic
-	rssi1 = pService->createCharacteristic(
+	pCharacteristic = pService->createCharacteristic(
 		BLEUUID(CHARACTERISTIC_UUID),
 		BLECharacteristic::PROPERTY_READ   |
 		BLECharacteristic::PROPERTY_WRITE  |
@@ -92,7 +92,7 @@ static void run() {
 
 	// https://www.bluetooth.com/specifications/gatt/viewer?attributeXmlFile=org.bluetooth.descriptor.gatt.client_characteristic_configuration.xml
 	// Create a BLE Descriptor
-	rssi1->addDescriptor(new BLE2902());
+	pCharacteristic->addDescriptor(new BLE2902());
 
 	// Start the service
 	pService->start();
